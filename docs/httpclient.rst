@@ -24,8 +24,12 @@
 
    Exceptions
    ----------
-   .. autoexception:: HTTPError
+   .. autoexception:: HTTPClientError
       :members:
+
+   .. exception:: HTTPError
+
+      Alias for `HTTPClientError`.
 
    Command-line interface
    ----------------------
@@ -47,7 +51,7 @@ Implementations
 
 .. module:: tornado.curl_httpclient
 
-.. class:: CurlAsyncHTTPClient(io_loop, max_clients=10, defaults=None)
+.. class:: CurlAsyncHTTPClient(max_clients=10, defaults=None)
 
    ``libcurl``-based HTTP client.
 
