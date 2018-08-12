@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 import errno
 import os
 import signal
@@ -7,18 +5,13 @@ import socket
 from subprocess import Popen
 import sys
 import time
+import unittest
 
 from tornado.netutil import (
     BlockingResolver, OverrideResolver, ThreadedResolver, is_valid_ip, bind_sockets
 )
-from tornado.stack_context import ExceptionStackContext
 from tornado.testing import AsyncTestCase, gen_test, bind_unused_port
-from tornado.test.util import unittest, skipIfNoNetwork
-
-try:
-    from concurrent import futures
-except ImportError:
-    futures = None
+from tornado.test.util import skipIfNoNetwork
 
 try:
     import pycares  # type: ignore
@@ -37,13 +30,8 @@ else:
 
 
 class _ResolverTestMixin(object):
-    def test_localhost(self):
-        self.resolver.resolve('localhost', 80, callback=self.stop)
-        result = self.wait()
-        self.assertIn((socket.AF_INET, ('127.0.0.1', 80)), result)
-
     @gen_test
-    def test_future_interface(self):
+    def test_localhost(self):
         addrinfo = yield self.resolver.resolve('localhost', 80,
                                                socket.AF_UNSPEC)
         self.assertIn((socket.AF_INET, ('127.0.0.1', 80)),
@@ -53,19 +41,8 @@ class _ResolverTestMixin(object):
 # It is impossible to quickly and consistently generate an error in name
 # resolution, so test this case separately, using mocks as needed.
 class _ResolverErrorTestMixin(object):
-    def test_bad_host(self):
-        def handler(exc_typ, exc_val, exc_tb):
-            self.stop(exc_val)
-            return True  # Halt propagation.
-
-        with ExceptionStackContext(handler):
-            self.resolver.resolve('an invalid domain', 80, callback=self.stop)
-
-        result = self.wait()
-        self.assertIsInstance(result, Exception)
-
     @gen_test
-    def test_future_interface_bad_host(self):
+    def test_bad_host(self):
         with self.assertRaises(IOError):
             yield self.resolver.resolve('an invalid domain', 80,
                                         socket.AF_UNSPEC)
@@ -108,18 +85,16 @@ class OverrideResolverTest(AsyncTestCase, _ResolverTestMixin):
         }
         self.resolver = OverrideResolver(BlockingResolver(), mapping)
 
+    @gen_test
     def test_resolve_multiaddr(self):
-        self.resolver.resolve('google.com', 80, socket.AF_INET, callback=self.stop)
-        result = self.wait()
+        result = yield self.resolver.resolve('google.com', 80, socket.AF_INET)
         self.assertIn((socket.AF_INET, ('1.2.3.4', 80)), result)
 
-        self.resolver.resolve('google.com', 80, socket.AF_INET6, callback=self.stop)
-        result = self.wait()
+        result = yield self.resolver.resolve('google.com', 80, socket.AF_INET6)
         self.assertIn((socket.AF_INET6, ('2a02:6b8:7c:40c:c51e:495f:e23a:3', 80, 0, 0)), result)
 
 
 @skipIfNoNetwork
-@unittest.skipIf(futures is None, "futures module not present")
 class ThreadedResolverTest(AsyncTestCase, _ResolverTestMixin):
     def setUp(self):
         super(ThreadedResolverTest, self).setUp()
@@ -143,7 +118,6 @@ class ThreadedResolverErrorTest(AsyncTestCase, _ResolverErrorTestMixin):
 
 
 @skipIfNoNetwork
-@unittest.skipIf(futures is None, "futures module not present")
 @unittest.skipIf(sys.platform == 'win32', "preexec_fn not available on win32")
 class ThreadedResolverImportTest(unittest.TestCase):
     def test_import(self):

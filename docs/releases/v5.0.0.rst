@@ -1,7 +1,7 @@
 What's new in Tornado 5.0
 =========================
 
-In progress
+Mar 5, 2018
 -----------
 
 Highlights
@@ -176,7 +176,7 @@ Other notes
   `tornado.util.TimeoutError`.
 - `.IOLoop.instance` is now a deprecated alias for `.IOLoop.current`.
 - `.IOLoop.install` and `.IOLoop.clear_instance` are deprecated.
-- ``IOLoop.initialized`` has been removed.
+- The ``IOLoop.initialized`` method has been removed.
 - On Python 3, the `asyncio`-backed `.IOLoop` is always used and
   alternative `.IOLoop` implementations cannot be configured.
   `.IOLoop.current` and related methods pass through to
@@ -193,13 +193,12 @@ Other notes
 - The ``io_loop`` argument to `.PeriodicCallback` has been removed.
 - It is now possible to create a `.PeriodicCallback` in one thread
   and start it in another without passing an explicit event loop.
-- The `.IOLoop.set_blocking_signal_threshold` and
-  `.IOLoop.set_blocking_log_threshold` methods are deprecated because
+- The ``IOLoop.set_blocking_signal_threshold`` and
+  ``IOLoop.set_blocking_log_threshold`` methods are deprecated because
   they are not implemented for the `asyncio` event loop`. Use the
   ``PYTHONASYNCIODEBUG=1`` environment variable instead.
 - `.IOLoop.clear_current` now works if it is called before any
   current loop is established.
-- The ``IOLoop.initialized`` method has been removed.
 
 `tornado.iostream`
 ~~~~~~~~~~~~~~~~~~
@@ -258,8 +257,8 @@ Other notes
 `tornado.platform.twisted`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- The ``io_loop`` arguments to `.TornadoReactor`, `.TwistedResolver`,
-  and `tornado.platform.twisted.install` have been removed.
+- The ``io_loop`` arguments to ``TornadoReactor``, `.TwistedResolver`,
+  and ``tornado.platform.twisted.install`` have been removed.
 
 `tornado.process`
 ~~~~~~~~~~~~~~~~~
@@ -322,6 +321,8 @@ Other notes
   garbage collection.
 - `.RedirectHandler` now copies any query arguments from the request
   to the redirect location.
+- If both ``If-None-Match`` and ``If-Modified-Since`` headers are present
+  in a request to `.StaticFileHandler`, the latter is now ignored.
 
 `tornado.websocket`
 ~~~~~~~~~~~~~~~~~~~

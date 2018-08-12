@@ -19,12 +19,10 @@ the same event loop.
    Windows. Use the `~asyncio.SelectorEventLoop` instead.
 """
 
-from __future__ import absolute_import, division, print_function
 import functools
 
 from tornado.gen import convert_yielded
 from tornado.ioloop import IOLoop
-from tornado import stack_context
 
 import asyncio
 
@@ -38,6 +36,20 @@ class BaseAsyncIOLoop(IOLoop):
         self.readers = set()
         self.writers = set()
         self.closing = False
+        # If an asyncio loop was closed through an asyncio interface
+        # instead of IOLoop.close(), we'd never hear about it and may
+        # have left a dangling reference in our map. In case an
+        # application (or, more likely, a test suite) creates and
+        # destroys a lot of event loops in this way, check here to
+        # ensure that we don't have a lot of dead loops building up in
+        # the map.
+        #
+        # TODO(bdarnell): consider making self.asyncio_loop a weakref
+        # for AsyncIOMainLoop and make _ioloop_for_asyncio a
+        # WeakKeyDictionary.
+        for loop in list(IOLoop._ioloop_for_asyncio):
+            if loop.is_closed():
+                del IOLoop._ioloop_for_asyncio[loop]
         IOLoop._ioloop_for_asyncio[asyncio_loop] = self
         super(BaseAsyncIOLoop, self).initialize(**kwargs)
 
@@ -48,13 +60,19 @@ class BaseAsyncIOLoop(IOLoop):
             self.remove_handler(fd)
             if all_fds:
                 self.close_fd(fileobj)
+        # Remove the mapping before closing the asyncio loop. If this
+        # happened in the other order, we could race against another
+        # initialize() call which would see the closed asyncio loop,
+        # assume it was closed from the asyncio side, and do this
+        # cleanup for us, leading to a KeyError.
+        del IOLoop._ioloop_for_asyncio[self.asyncio_loop]
         self.asyncio_loop.close()
 
     def add_handler(self, fd, handler, events):
         fd, fileobj = self.split_fd(fd)
         if fd in self.handlers:
             raise ValueError("fd %s added twice" % fd)
-        self.handlers[fd] = (fileobj, stack_context.wrap(handler))
+        self.handlers[fd] = (fileobj, handler)
         if events & IOLoop.READ:
             self.asyncio_loop.add_reader(
                 fd, self._handle_events, fd, IOLoop.READ)
@@ -104,7 +122,7 @@ class BaseAsyncIOLoop(IOLoop):
     def start(self):
         try:
             old_loop = asyncio.get_event_loop()
-        except RuntimeError:
+        except (RuntimeError, AssertionError):
             old_loop = None
         try:
             self._setup_logging()
@@ -122,7 +140,7 @@ class BaseAsyncIOLoop(IOLoop):
         # convert from absolute to relative.
         return self.asyncio_loop.call_later(
             max(0, when - self.time()), self._run_callback,
-            functools.partial(stack_context.wrap(callback), *args, **kwargs))
+            functools.partial(callback, *args, **kwargs))
 
     def remove_timeout(self, timeout):
         timeout.cancel()
@@ -131,7 +149,7 @@ class BaseAsyncIOLoop(IOLoop):
         try:
             self.asyncio_loop.call_soon_threadsafe(
                 self._run_callback,
-                functools.partial(stack_context.wrap(callback), *args, **kwargs))
+                functools.partial(callback, *args, **kwargs))
         except RuntimeError:
             # "Event loop is closed". Swallow the exception for
             # consistency with PollIOLoop (and logical consistency
@@ -211,7 +229,7 @@ class AsyncIOLoop(BaseAsyncIOLoop):
         if not self.is_current:
             try:
                 self.old_asyncio = asyncio.get_event_loop()
-            except RuntimeError:
+            except (RuntimeError, AssertionError):
                 self.old_asyncio = None
             self.is_current = True
         asyncio.set_event_loop(self.asyncio_loop)
@@ -250,7 +268,7 @@ def to_asyncio_future(tornado_future):
     return convert_yielded(tornado_future)
 
 
-class AnyThreadEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
+class AnyThreadEventLoopPolicy(asyncio.DefaultEventLoopPolicy):  # type: ignore
     """Event loop policy that allows loop creation on any thread.
 
     The default `asyncio` event loop policy only automatically creates
@@ -270,7 +288,9 @@ class AnyThreadEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
     def get_event_loop(self):
         try:
             return super().get_event_loop()
-        except RuntimeError:
+        except (RuntimeError, AssertionError):
+            # This was an AssertionError in python 3.4.2 (which ships with debian jessie)
+            # and changed to a RuntimeError in 3.4.3.
             # "There is no current event loop in thread %r"
             loop = self.new_event_loop()
             self.set_event_loop(loop)

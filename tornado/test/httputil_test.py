@@ -1,26 +1,31 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import, division, print_function
-
 from tornado.httputil import (
     url_concat, parse_multipart_form_data, HTTPHeaders, format_timestamp,
     HTTPServerRequest, parse_request_start_line, parse_cookie, qs_to_qsl,
+    HTTPInputError, HTTPFile
 )
 from tornado.escape import utf8, native_str
-from tornado.util import PY3
 from tornado.log import gen_log
 from tornado.testing import ExpectLog
-from tornado.test.util import unittest
 
 import copy
 import datetime
 import logging
 import pickle
 import time
+import urllib.parse
+import unittest
 
-if PY3:
-    import urllib.parse as urllib_parse
-else:
-    import urlparse as urllib_parse
+from typing import Tuple, Dict, List
+
+
+def form_data_args() -> Tuple[Dict[str, List[bytes]], Dict[str, List[HTTPFile]]]:
+    """Return two empty dicts suitable for use with parse_multipart_form_data.
+
+    mypy insists on type annotations for dict literals, so this lets us avoid
+    the verbose types throughout this test.
+    """
+    return {}, {}
 
 
 class TestUrlConcat(unittest.TestCase):
@@ -113,7 +118,7 @@ class QsParseTest(unittest.TestCase):
 
     def test_parsing(self):
         qsstring = "a=1&b=2&a=3"
-        qs = urllib_parse.parse_qs(qsstring)
+        qs = urllib.parse.parse_qs(qsstring)
         qsl = list(qs_to_qsl(qs))
         self.assertIn(('a', '1'), qsl)
         self.assertIn(('a', '3'), qsl)
@@ -128,8 +133,7 @@ Content-Disposition: form-data; name="files"; filename="ab.txt"
 
 Foo
 --1234--""".replace(b"\n", b"\r\n")
-        args = {}
-        files = {}
+        args, files = form_data_args()
         parse_multipart_form_data(b"1234", data, args, files)
         file = files["files"][0]
         self.assertEqual(file["filename"], "ab.txt")
@@ -143,8 +147,7 @@ Content-Disposition: form-data; name=files; filename=ab.txt
 
 Foo
 --1234--""".replace(b"\n", b"\r\n")
-        args = {}
-        files = {}
+        args, files = form_data_args()
         parse_multipart_form_data(b"1234", data, args, files)
         file = files["files"][0]
         self.assertEqual(file["filename"], "ab.txt")
@@ -161,19 +164,31 @@ Foo
                      ]
         for filename in filenames:
             logging.debug("trying filename %r", filename)
-            data = """\
+            str_data = """\
 --1234
 Content-Disposition: form-data; name="files"; filename="%s"
 
 Foo
 --1234--""" % filename.replace('\\', '\\\\').replace('"', '\\"')
-            data = utf8(data.replace("\n", "\r\n"))
-            args = {}
-            files = {}
+            data = utf8(str_data.replace("\n", "\r\n"))
+            args, files = form_data_args()
             parse_multipart_form_data(b"1234", data, args, files)
             file = files["files"][0]
             self.assertEqual(file["filename"], filename)
             self.assertEqual(file["body"], b"Foo")
+
+    def test_non_ascii_filename(self):
+        data = b"""\
+--1234
+Content-Disposition: form-data; name="files"; filename="ab.txt"; filename*=UTF-8''%C3%A1b.txt
+
+Foo
+--1234--""".replace(b"\n", b"\r\n")
+        args, files = form_data_args()
+        parse_multipart_form_data(b"1234", data, args, files)
+        file = files["files"][0]
+        self.assertEqual(file["filename"], u"áb.txt")
+        self.assertEqual(file["body"], b"Foo")
 
     def test_boundary_starts_and_ends_with_quotes(self):
         data = b'''\
@@ -182,8 +197,7 @@ Content-Disposition: form-data; name="files"; filename="ab.txt"
 
 Foo
 --1234--'''.replace(b"\n", b"\r\n")
-        args = {}
-        files = {}
+        args, files = form_data_args()
         parse_multipart_form_data(b'"1234"', data, args, files)
         file = files["files"][0]
         self.assertEqual(file["filename"], "ab.txt")
@@ -195,8 +209,7 @@ Foo
 
 Foo
 --1234--'''.replace(b"\n", b"\r\n")
-        args = {}
-        files = {}
+        args, files = form_data_args()
         with ExpectLog(gen_log, "multipart/form-data missing headers"):
             parse_multipart_form_data(b"1234", data, args, files)
         self.assertEqual(files, {})
@@ -208,8 +221,7 @@ Content-Disposition: invalid; name="files"; filename="ab.txt"
 
 Foo
 --1234--'''.replace(b"\n", b"\r\n")
-        args = {}
-        files = {}
+        args, files = form_data_args()
         with ExpectLog(gen_log, "Invalid multipart/form-data"):
             parse_multipart_form_data(b"1234", data, args, files)
         self.assertEqual(files, {})
@@ -220,8 +232,7 @@ Foo
 Content-Disposition: form-data; name="files"; filename="ab.txt"
 
 Foo--1234--'''.replace(b"\n", b"\r\n")
-        args = {}
-        files = {}
+        args, files = form_data_args()
         with ExpectLog(gen_log, "Invalid multipart/form-data"):
             parse_multipart_form_data(b"1234", data, args, files)
         self.assertEqual(files, {})
@@ -233,8 +244,7 @@ Content-Disposition: form-data; filename="ab.txt"
 
 Foo
 --1234--""".replace(b"\n", b"\r\n")
-        args = {}
-        files = {}
+        args, files = form_data_args()
         with ExpectLog(gen_log, "multipart/form-data value missing name"):
             parse_multipart_form_data(b"1234", data, args, files)
         self.assertEqual(files, {})
@@ -250,8 +260,7 @@ Content-Disposition: form-data; name="files"; filename="ab.txt"
 Foo
 --1234--
 """.replace(b"\n", b"\r\n")
-        args = {}
-        files = {}
+        args, files = form_data_args()
         parse_multipart_form_data(b"1234", data, args, files)
         file = files["files"][0]
         self.assertEqual(file["filename"], "ab.txt")
@@ -282,6 +291,13 @@ Foo: even
                          [("Asdf", "qwer zxcv"),
                           ("Foo", "bar baz"),
                           ("Foo", "even more lines")])
+
+    def test_malformed_continuation(self):
+        # If the first line starts with whitespace, it's a
+        # continuation line with nothing to continue, so reject it
+        # (with a proper error).
+        data = " Foo: bar"
+        self.assertRaises(HTTPInputError, HTTPHeaders.parse, data)
 
     def test_unicode_newlines(self):
         # Ensure that only \r\n is recognized as a header separator, and not
@@ -421,7 +437,7 @@ class HTTPServerRequestTest(unittest.TestCase):
         self.assertIsInstance(requets.body, bytes)
 
     def test_repr_does_not_contain_headers(self):
-        request = HTTPServerRequest(uri='/', headers={'Canary': 'Coal Mine'})
+        request = HTTPServerRequest(uri='/', headers=HTTPHeaders({'Canary': ['Coal Mine']}))
         self.assertTrue('Canary' not in repr(request))
 
 

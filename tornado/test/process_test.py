@@ -1,10 +1,10 @@
-from __future__ import absolute_import, division, print_function
-
+import asyncio
 import logging
 import os
 import signal
 import subprocess
 import sys
+import unittest
 
 from tornado.httpclient import HTTPClient, HTTPError
 from tornado.httpserver import HTTPServer
@@ -13,22 +13,11 @@ from tornado.log import gen_log
 from tornado.process import fork_processes, task_id, Subprocess
 from tornado.simple_httpclient import SimpleAsyncHTTPClient
 from tornado.testing import bind_unused_port, ExpectLog, AsyncTestCase, gen_test
-from tornado.test.util import unittest, skipIfNonUnix
+from tornado.test.util import skipIfNonUnix
 from tornado.web import RequestHandler, Application
 
-try:
-    import asyncio
-except ImportError:
-    asyncio = None
-
-
-def skip_if_twisted():
-    if IOLoop.configured_class().__name__.endswith('TwistedIOLoop'):
-        raise unittest.SkipTest("Process tests not compatible with TwistedIOLoop")
 
 # Not using AsyncHTTPTestCase because we need control over the IOLoop.
-
-
 @skipIfNonUnix
 class ProcessTest(unittest.TestCase):
     def get_app(self):
@@ -64,7 +53,6 @@ class ProcessTest(unittest.TestCase):
         # reactor and don't restore it to a sane state after the fork
         # (asyncio has the same issue, but we have a special case in
         # place for it).
-        skip_if_twisted()
         with ExpectLog(gen_log, "(Starting .* processes|child .* exited|uncaught exception)"):
             sock, port = bind_unused_port()
 
@@ -143,6 +131,7 @@ class ProcessTest(unittest.TestCase):
 
 @skipIfNonUnix
 class SubprocessTest(AsyncTestCase):
+    @gen_test
     def test_subprocess(self):
         if IOLoop.configured_class().__name__.endswith('LayeredTwistedIOLoop'):
             # This test fails non-deterministically with LayeredTwistedIOLoop.
@@ -158,50 +147,42 @@ class SubprocessTest(AsyncTestCase):
         self.addCleanup(lambda: (subproc.proc.terminate(), subproc.proc.wait()))
         self.addCleanup(subproc.stdout.close)
         self.addCleanup(subproc.stdin.close)
-        subproc.stdout.read_until(b'>>> ', self.stop)
-        self.wait()
+        yield subproc.stdout.read_until(b'>>> ')
         subproc.stdin.write(b"print('hello')\n")
-        subproc.stdout.read_until(b'\n', self.stop)
-        data = self.wait()
+        data = yield subproc.stdout.read_until(b'\n')
         self.assertEqual(data, b"hello\n")
 
-        subproc.stdout.read_until(b">>> ", self.stop)
-        self.wait()
+        yield subproc.stdout.read_until(b">>> ")
         subproc.stdin.write(b"raise SystemExit\n")
-        subproc.stdout.read_until_close(self.stop)
-        data = self.wait()
+        data = yield subproc.stdout.read_until_close()
         self.assertEqual(data, b"")
 
+    @gen_test
     def test_close_stdin(self):
         # Close the parent's stdin handle and see that the child recognizes it.
         subproc = Subprocess([sys.executable, '-u', '-i'],
                              stdin=Subprocess.STREAM,
                              stdout=Subprocess.STREAM, stderr=subprocess.STDOUT)
         self.addCleanup(lambda: (subproc.proc.terminate(), subproc.proc.wait()))
-        subproc.stdout.read_until(b'>>> ', self.stop)
-        self.wait()
+        yield subproc.stdout.read_until(b'>>> ')
         subproc.stdin.close()
-        subproc.stdout.read_until_close(self.stop)
-        data = self.wait()
+        data = yield subproc.stdout.read_until_close()
         self.assertEqual(data, b"\n")
 
+    @gen_test
     def test_stderr(self):
         # This test is mysteriously flaky on twisted: it succeeds, but logs
         # an error of EBADF on closing a file descriptor.
-        skip_if_twisted()
         subproc = Subprocess([sys.executable, '-u', '-c',
                               r"import sys; sys.stderr.write('hello\n')"],
                              stderr=Subprocess.STREAM)
         self.addCleanup(lambda: (subproc.proc.terminate(), subproc.proc.wait()))
-        subproc.stderr.read_until(b'\n', self.stop)
-        data = self.wait()
+        data = yield subproc.stderr.read_until(b'\n')
         self.assertEqual(data, b'hello\n')
         # More mysterious EBADF: This fails if done with self.addCleanup instead of here.
         subproc.stderr.close()
 
     def test_sigchild(self):
-        # Twisted's SIGCHLD handler and Subprocess's conflict with each other.
-        skip_if_twisted()
         Subprocess.initialize()
         self.addCleanup(Subprocess.uninitialize)
         subproc = Subprocess([sys.executable, '-c', 'pass'])
@@ -212,7 +193,6 @@ class SubprocessTest(AsyncTestCase):
 
     @gen_test
     def test_sigchild_future(self):
-        skip_if_twisted()
         Subprocess.initialize()
         self.addCleanup(Subprocess.uninitialize)
         subproc = Subprocess([sys.executable, '-c', 'pass'])
@@ -221,7 +201,6 @@ class SubprocessTest(AsyncTestCase):
         self.assertEqual(subproc.returncode, ret)
 
     def test_sigchild_signal(self):
-        skip_if_twisted()
         Subprocess.initialize()
         self.addCleanup(Subprocess.uninitialize)
         subproc = Subprocess([sys.executable, '-c',
@@ -252,7 +231,6 @@ class SubprocessTest(AsyncTestCase):
 
     @gen_test
     def test_wait_for_exit_raise(self):
-        skip_if_twisted()
         Subprocess.initialize()
         self.addCleanup(Subprocess.uninitialize)
         subproc = Subprocess([sys.executable, '-c', 'import sys; sys.exit(1)'])
@@ -262,7 +240,6 @@ class SubprocessTest(AsyncTestCase):
 
     @gen_test
     def test_wait_for_exit_raise_disabled(self):
-        skip_if_twisted()
         Subprocess.initialize()
         self.addCleanup(Subprocess.uninitialize)
         subproc = Subprocess([sys.executable, '-c', 'import sys; sys.exit(1)'])
